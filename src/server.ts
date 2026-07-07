@@ -31,13 +31,30 @@ app.use(cors({
   origin: FRONTEND_URL, 
   credentials: true // Crucial: allows secure cookies to be sent back and forth
 }));
-app.use(express.json({ limit: '10mb' })); // Increased limit just in case payload is large
+app.use(express.json({ limit: '10mb' })); 
 
 // 2. Set up Secure Cookies
 app.use(cookieSession({
+  name: 'session',
   maxAge: 24 * 60 * 60 * 1000, // Session lasts for 1 day
   keys: [process.env.SESSION_SECRET || 'default_secret_key_change_in_production']
 }));
+
+// --- FIX FOR PASSPORT + COOKIE-SESSION ---
+// Passport 0.6.0+ requires req.session.regenerate and req.session.save
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.session && !req.session.regenerate) {
+    req.session.regenerate = (cb: any) => {
+      cb();
+    };
+  }
+  if (req.session && !req.session.save) {
+    req.session.save = (cb: any) => {
+      cb();
+    };
+  }
+  next();
+});
 
 app.use(passport.initialize());
 app.use(passport.session());
@@ -173,7 +190,6 @@ app.delete('/api/ooo-logs/:id', requireAuth, async (req, res) => {
 // --- Completed Upgrades ---
 app.get('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
   try {
-    // Only allow users to fetch their own upgrades
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
     
     const snapshot = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').get();
