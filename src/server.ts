@@ -33,11 +33,21 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' })); 
 
+// --- NEW: Trust the Render proxy so secure cookies work ---
+app.set('trust proxy', 1);
+
+// Determine if we are running in production or locally
+const isProduction = process.env.NODE_ENV === 'production' || FRONTEND_URL.includes('onrender.com');
+
 // 2. Set up Secure Cookies
 app.use(cookieSession({
   name: 'session',
   maxAge: 24 * 60 * 60 * 1000, // Session lasts for 1 day
-  keys: [process.env.SESSION_SECRET || 'default_secret_key_change_in_production']
+  keys: [process.env.SESSION_SECRET || 'default_secret_key_change_in_production'],
+  // --- NEW: Required settings for cross-domain cookies ---
+  secure: isProduction, // Must be true in production
+  sameSite: isProduction ? 'none' : 'lax', // Must be 'none' to allow cross-domain
+  httpOnly: true
 }));
 
 // --- FIX FOR PASSPORT + COOKIE-SESSION ---
