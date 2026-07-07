@@ -9,75 +9,102 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// 1. Initialize Firebase Admin securely
+// 1. Initialize Firebase Admin
 const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || '{}';
 let serviceAccount;
 try {
   serviceAccount = JSON.parse(serviceAccountRaw);
 } catch (e) {
-  console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY. Make sure it's valid JSON.");
+  console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY.");
 }
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = admin.firestore();
-
 const app = express();
 
-// Set up CORS so your frontend can communicate with this backend securely
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
-app.use(cors({ 
-  origin: FRONTEND_URL, 
-  credentials: true // Crucial: allows secure cookies to be sent back and forth
-}));
+app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json({ limit: '10mb' })); 
 
-// --- Trust the Render proxy so secure cookies work ---
 app.set('trust proxy', 1);
-
-// Determine if we are running in production or locally
 const isProduction = process.env.NODE_ENV === 'production' || FRONTEND_URL.includes('onrender.com');
 
-// 2. Set up Secure Cookies
 app.use(cookieSession({
   name: 'session',
-  maxAge: 24 * 60 * 60 * 1000, // Session lasts for 1 day
-  keys: [process.env.SESSION_SECRET || 'default_secret_key_change_in_production'],
-  secure: isProduction, // Must be true in production
-  sameSite: isProduction ? 'none' : 'lax', // Must be 'none' to allow cross-domain
+  maxAge: 24 * 60 * 60 * 1000, 
+  keys: [process.env.SESSION_SECRET || 'default_secret_key'],
+  secure: isProduction, 
+  sameSite: isProduction ? 'none' : 'lax', 
   httpOnly: true
 }));
 
-// --- FIX FOR PASSPORT + COOKIE-SESSION ---
-// Passport 0.6.0+ requires req.session.regenerate and req.session.save
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (req.session && !req.session.regenerate) {
-    req.session.regenerate = (cb: any) => {
-      cb();
-    };
-  }
-  if (req.session && !req.session.save) {
-    req.session.save = (cb: any) => {
-      cb();
-    };
-  }
+  if (req.session && !req.session.regenerate) req.session.regenerate = (cb: any) => cb();
+  if (req.session && !req.session.save) req.session.save = (cb: any) => cb();
   next();
 });
 
 app.use(passport.initialize());
 app.use(passport.session());
 
-// 3. Configure Google OAuth Strategy
+// ==========================================
+// NEW SECURITY GATEKEEPER (WHITELIST)
+// ==========================================
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     callbackURL: '/auth/google/callback',
-    proxy: true // Trust the Render reverse proxy so redirect URLs are HTTPS
+    proxy: true 
   },
-  (accessToken, refreshToken, profile, done) => {
-    // Save Google profile to our session cookie
-    done(null, profile);
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      const email = profile.emails?.[0]?.value?.toLowerCase();
+      if (!email) return done(new Error("No email found"), false);
+
+      // CHANGE THIS TO YOUR ACTUAL EMAIL TO BOOTSTRAP YOUR FIRST ACCOUNT
+      const SUPER_ADMIN_EMAIL = 'jryan@charlestownehotels.com'; 
+
+      const userRef = db.collection('user_access').doc(email);
+      const userDoc = await userRef.get();
+
+      // If user isn't in DB and isn't the Super Admin, reject them
+      if (!userDoc.exists && email !== SUPER_ADMIN_EMAIL) {
+        return done(null, false, { message: 'unauthorized' }); 
+      }
+
+      // If Super Admin logs in for the very first time, create their Admin profile
+      if (!userDoc.exists && email === SUPER_ADMIN_EMAIL) {
+        await userRef.set({
+          name: profile.displayName,
+          email: email,
+          role: 'Admin',
+          assignedProperties: [],
+          lastSignIn: new Date()
+        });
+      } else {
+        // Update last sign in for existing users
+        await userRef.update({ lastSignIn: new Date() });
+      }
+
+      // Fetch fresh data
+      const freshUserDoc = await userRef.get();
+      const userData = freshUserDoc.data();
+
+      // Build the secure session object
+      const sessionUser = {
+        id: profile.id,
+        email: email,
+        name: profile.displayName || userData?.name,
+        role: userData?.role || 'Property User',
+        assignedProperties: userData?.assignedProperties || []
+      };
+
+      done(null, sessionUser);
+    } catch (error) {
+      done(error, false);
+    }
   }
 ));
 
@@ -87,38 +114,89 @@ passport.deserializeUser((user: Express.User, done) => done(null, user));
 // ==========================================
 // AUTHENTICATION ROUTES
 // ==========================================
-
-// Frontend redirects here to start the login process
 app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-// Google redirects here after successful login
-app.get('/auth/google/callback', passport.authenticate('google', { failureRedirect: FRONTEND_URL }), (req, res) => {
-  res.redirect(FRONTEND_URL);
+// Custom callback to handle rejected logins gracefully
+app.get('/auth/google/callback', (req, res, next) => {
+  passport.authenticate('google', (err: any, user: any, info: any) => {
+    if (err || !user) {
+      // User is not whitelisted, send them back to frontend with an error flag
+      return res.redirect(`${FRONTEND_URL}?error=unauthorized`);
+    }
+    req.logIn(user, (loginErr) => {
+      if (loginErr) return next(loginErr);
+      return res.redirect(FRONTEND_URL);
+    });
+  })(req, res, next);
 });
 
-// Frontend calls this to check if user is logged in
-app.get('/api/current-user', (req, res) => {
-  res.json(req.user || null);
-});
-
-// Frontend redirects here to log out
+app.get('/api/current-user', (req, res) => res.json(req.user || null));
 app.get('/auth/logout', (req, res) => {
-  req.logout(() => {
-    res.redirect(FRONTEND_URL);
-  });
+  req.logout(() => res.redirect(FRONTEND_URL));
 });
 
 // ==========================================
-// SECURE DATABASE ROUTES
+// MIDDLEWARE
 // ==========================================
-
-// Middleware to protect routes
 const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
   next();
 };
 
-// --- Custom Properties ---
+const requireAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!req.user || (req.user as any).role !== 'Admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+};
+
+// ==========================================
+// ADMIN PORTAL ROUTES (NEW)
+// ==========================================
+// Get all users
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const snapshot = await db.collection('user_access').get();
+    const users: any[] = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      if (data.lastSignIn) data.lastSignIn = data.lastSignIn.toDate().toISOString();
+      users.push(data);
+    });
+    res.json(users);
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Add or Update User
+app.post('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const { email, name, role, assignedProperties } = req.body;
+    const cleanEmail = email.toLowerCase();
+    
+    await db.collection('user_access').doc(cleanEmail).set({
+      email: cleanEmail,
+      name,
+      role,
+      assignedProperties: assignedProperties || [],
+      updatedAt: new Date()
+    }, { merge: true }); // Merge true keeps lastSignIn if it exists
+    
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete User
+app.delete('/api/admin/users/:email', requireAdmin, async (req, res) => {
+  try {
+    await db.collection('user_access').doc(req.params.email).delete();
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ==========================================
+// STANDARD DATABASE ROUTES (Existing)
+// ==========================================
 app.get('/api/custom-properties', requireAuth, async (req, res) => {
   try {
     const snapshot = await db.collection('custom_properties').get();
@@ -136,7 +214,6 @@ app.post('/api/custom-properties', requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Remote Profiles (Settings) ---
 app.get('/api/remote-profiles', requireAuth, async (req, res) => {
   try {
     const doc = await db.collection('app_settings').doc('profile_rules').get();
@@ -152,7 +229,6 @@ app.post('/api/remote-profiles', requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// --- OOO Records ---
 app.get('/api/ooo-logs/:profile', requireAuth, async (req, res) => {
   try {
     const profile = req.params.profile;
@@ -196,19 +272,15 @@ app.delete('/api/ooo-logs/:id', requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Completed Upgrades ---
 app.get('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
   try {
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    
     const snapshot = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').get();
     const upgrades: any[] = [];
     snapshot.forEach((doc: any) => {
       const data = doc.data();
       data.firestoreId = doc.id;
-      if (data.completedTimestamp) {
-        data.completedTimestamp = data.completedTimestamp.toDate().toISOString();
-      }
+      if (data.completedTimestamp) data.completedTimestamp = data.completedTimestamp.toDate().toISOString();
       upgrades.push(data);
     });
     res.json(upgrades);
@@ -218,10 +290,8 @@ app.get('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
 app.post('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
   try {
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    
     const upgrade = req.body;
     if (upgrade.completedTimestamp) upgrade.completedTimestamp = new Date(upgrade.completedTimestamp);
-    
     const docRef = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').add(upgrade);
     res.json({ firestoreId: docRef.id });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -238,10 +308,8 @@ app.delete('/api/completed-upgrades/:userId/:firestoreId', requireAuth, async (r
 app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAuth, async (req, res) => {
   try {
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    
     const snapshot = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').where('profile', '==', req.params.profile).get();
     if (snapshot.empty) return res.json({ count: 0 });
-    
     const batch = db.batch();
     snapshot.docs.forEach((doc: any) => batch.delete(doc.ref));
     await batch.commit();
@@ -249,11 +317,9 @@ app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAuth, async 
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Accepted Upgrades ---
 app.get('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res) => {
   try {
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    
     const snapshot = await db.collection('users').doc(req.params.userId).collection('acceptedUpgrades').where('profile', '==', req.params.profile).get();
     const upgrades: any[] = [];
     snapshot.forEach(doc => upgrades.push(doc.data()));
@@ -264,7 +330,6 @@ app.get('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res)
 app.post('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res) => {
   try {
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    
     const { upgrades } = req.body;
     const profile = req.params.profile;
     const ref = db.collection('users').doc(req.params.userId).collection('acceptedUpgrades');
@@ -275,22 +340,15 @@ app.post('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res
       clean.profile = profile;
       return clean;
     };
-
     const batch = db.batch();
     const existing = await ref.where('profile', '==', profile).get();
     existing.docs.forEach((doc: any) => batch.delete(doc.ref));
-
-    upgrades.forEach((upg: any) => {
-      const newDocRef = ref.doc();
-      batch.set(newDocRef, sanitize(upg));
-    });
-
+    upgrades.forEach((upg: any) => batch.set(ref.doc(), sanitize(upg)));
     await batch.commit();
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Lead Times & Cloud Data ---
 app.get('/api/lead-times/:profile', requireAuth, async (req, res) => {
   try {
     const doc = await db.collection('property_analytics').doc(req.params.profile).get();
@@ -321,40 +379,6 @@ app.get('/api/synxis-data/:prefix', requireAuth, async (req, res) => {
     const doc = await db.collection('SynxisData').doc(`${req.params.prefix}_latest`).get();
     res.json(doc.exists ? doc.data() : null);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
-
-// ==========================================
-// TEMPORARY DATA MIGRATION ROUTE
-// ==========================================
-app.get('/api/migrate-my-data', requireAuth, async (req, res) => {
-  try {
-    const oldId = '7BdsGq6vJ7UTmAQgVoiEesgEiao1'; // Your old Firebase UID
-    const newId = (req.user as any).id;             // Your new Google ID
-
-    const batch = db.batch();
-
-    // 1. Copy Completed Upgrades
-    const completed = await db.collection('users').doc(oldId).collection('completedUpgrades').get();
-    completed.docs.forEach(doc => {
-      const newRef = db.collection('users').doc(newId).collection('completedUpgrades').doc(doc.id);
-      batch.set(newRef, doc.data());
-    });
-
-    // 2. Copy Accepted Upgrades
-    const accepted = await db.collection('users').doc(oldId).collection('acceptedUpgrades').get();
-    accepted.docs.forEach(doc => {
-      const newRef = db.collection('users').doc(newId).collection('acceptedUpgrades').doc(doc.id);
-      batch.set(newRef, doc.data());
-    });
-
-    await batch.commit();
-    res.json({ 
-      success: true, 
-      message: `Successfully migrated ${completed.size} completed upgrades and ${accepted.size} accepted upgrades to folder ${newId}!` 
-    });
-  } catch (e: any) { 
-    res.status(500).json({ error: e.message }); 
-  }
 });
 
 const PORT = process.env.PORT || 3000;
