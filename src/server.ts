@@ -33,7 +33,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' })); 
 
-// --- NEW: Trust the Render proxy so secure cookies work ---
+// --- Trust the Render proxy so secure cookies work ---
 app.set('trust proxy', 1);
 
 // Determine if we are running in production or locally
@@ -44,7 +44,6 @@ app.use(cookieSession({
   name: 'session',
   maxAge: 24 * 60 * 60 * 1000, // Session lasts for 1 day
   keys: [process.env.SESSION_SECRET || 'default_secret_key_change_in_production'],
-  // --- NEW: Required settings for cross-domain cookies ---
   secure: isProduction, // Must be true in production
   sameSite: isProduction ? 'none' : 'lax', // Must be 'none' to allow cross-domain
   httpOnly: true
@@ -322,6 +321,40 @@ app.get('/api/synxis-data/:prefix', requireAuth, async (req, res) => {
     const doc = await db.collection('SynxisData').doc(`${req.params.prefix}_latest`).get();
     res.json(doc.exists ? doc.data() : null);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// ==========================================
+// TEMPORARY DATA MIGRATION ROUTE
+// ==========================================
+app.get('/api/migrate-my-data', requireAuth, async (req, res) => {
+  try {
+    const oldId = '7BdsGq6vJ7UTmAQgVoiEesgEiao1'; // Your old Firebase UID
+    const newId = (req.user as any).id;             // Your new Google ID
+
+    const batch = db.batch();
+
+    // 1. Copy Completed Upgrades
+    const completed = await db.collection('users').doc(oldId).collection('completedUpgrades').get();
+    completed.docs.forEach(doc => {
+      const newRef = db.collection('users').doc(newId).collection('completedUpgrades').doc(doc.id);
+      batch.set(newRef, doc.data());
+    });
+
+    // 2. Copy Accepted Upgrades
+    const accepted = await db.collection('users').doc(oldId).collection('acceptedUpgrades').get();
+    accepted.docs.forEach(doc => {
+      const newRef = db.collection('users').doc(newId).collection('acceptedUpgrades').doc(doc.id);
+      batch.set(newRef, doc.data());
+    });
+
+    await batch.commit();
+    res.json({ 
+      success: true, 
+      message: `Successfully migrated ${completed.size} completed upgrades and ${accepted.size} accepted upgrades to folder ${newId}!` 
+    });
+  } catch (e: any) { 
+    res.status(500).json({ error: e.message }); 
+  }
 });
 
 const PORT = process.env.PORT || 3000;
