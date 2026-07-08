@@ -381,6 +381,11 @@ app.get('/api/synxis-data/:prefix', requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// Lightweight endpoint for cron-job.org to ping
+app.get('/api/health', (req, res) => {
+  res.status(200).send('Server is awake');
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Backend Server running on port ${PORT}`);
