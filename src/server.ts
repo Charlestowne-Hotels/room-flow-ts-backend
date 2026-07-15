@@ -40,6 +40,19 @@ app.use(cookieSession({
   httpOnly: true
 }));
 
+// ==========================================
+// FIX A: SLIDING SESSION EXPIRY
+// cookie-session only re-issues the cookie when the session object changes.
+// Touching a value on every request resets the 24h maxAge window, so active
+// users don't get logged out mid-session (and stop hitting spurious 401s).
+// ==========================================
+app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (req.session) {
+    (req.session as any).nowInMinutes = Math.floor(Date.now() / 60000);
+  }
+  next();
+});
+
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (req.session && !req.session.regenerate) req.session.regenerate = (cb: any) => cb();
   if (req.session && !req.session.save) req.session.save = (cb: any) => cb();
@@ -192,8 +205,6 @@ app.delete('/api/admin/users/:email', requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
-
 // ==========================================
 // STANDARD DATABASE ROUTES (Existing)
 // ==========================================
