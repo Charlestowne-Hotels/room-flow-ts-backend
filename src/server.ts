@@ -163,6 +163,17 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
   next();
 };
 
+// Blocks access to a property the user isn't assigned to (admins bypass). Expects a :profile route param.
+const requirePropertyAccess = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const user = req.user as any;
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (user.role === 'Admin') return next();
+  const profile = req.params.profile;
+  const assigned = (user.assignedProperties || []).map((p: string) => p.toLowerCase());
+  if (profile && assigned.includes(profile.toLowerCase())) return next();
+  return res.status(403).json({ error: 'Not assigned to this property' });
+};
+
 // ==========================================
 // ADMIN PORTAL ROUTES (NEW)
 // ==========================================
@@ -217,7 +228,7 @@ app.get('/api/custom-properties', requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/custom-properties', requireAuth, async (req, res) => {
+app.post('/api/custom-properties', requireAdmin, async (req, res) => {
   try {
     const { code, data } = req.body;
     await db.collection('custom_properties').doc(code).set(data);
@@ -240,7 +251,7 @@ app.post('/api/remote-profiles', requireAuth, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/ooo-logs/:profile', requireAuth, async (req, res) => {
+app.get('/api/ooo-logs/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
     const profile = req.params.profile;
     const snapshot = await db.collection('ooo_logs').where('profile', '==', profile).get();
@@ -316,7 +327,7 @@ app.delete('/api/completed-upgrades/:userId/:firestoreId', requireAuth, async (r
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAuth, async (req, res) => {
+app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAdmin, async (req, res) => {
   try {
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
     const snapshot = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').where('profile', '==', req.params.profile).get();
