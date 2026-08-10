@@ -33,6 +33,20 @@ app.use(express.json({ limit: '10mb' }));
 
 app.set('trust proxy', 1);
 const isProduction = process.env.NODE_ENV === 'production' || FRONTEND_URL.includes('onrender.com');
+// ==========================================
+// SESSION SECRET GUARD
+// cookie-session signs (does not encrypt) session contents, so a known or weak
+// secret lets anyone forge a cookie claiming role: 'Admin'. Refuse to start
+// rather than degrade silently to a hardcoded default.
+// ==========================================
+const SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET || SESSION_SECRET.length < 32) {
+  console.error(
+    'FATAL: SESSION_SECRET is missing or too short (need 32+ chars). ' +
+    'Set it in the environment before starting the server.'
+  );
+  process.exit(1);
+}
 
 app.use(cookieSession({
   name: 'session',
