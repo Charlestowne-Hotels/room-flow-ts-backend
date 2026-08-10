@@ -51,7 +51,7 @@ if (!SESSION_SECRET || SESSION_SECRET.length < 32) {
 app.use(cookieSession({
   name: 'session',
   maxAge: 24 * 60 * 60 * 1000, 
-  keys: [process.env.SESSION_SECRET || 'default_secret_key'],
+  keys: [SESSION_SECRET],
   secure: isProduction, 
   sameSite: isProduction ? 'none' : 'lax', 
   httpOnly: true
