@@ -239,7 +239,9 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
     snapshot.forEach(doc => {
       const data = doc.data();
       if (data.lastSignIn) data.lastSignIn = data.lastSignIn.toDate().toISOString();
-      users.push(data);
+      // Never send hashes to the client; expose only whether one is set.
+      const { passwordHash, ...safe } = data;
+      users.push({ ...safe, hasPassword: !!passwordHash });
     });
     res.json(users);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
