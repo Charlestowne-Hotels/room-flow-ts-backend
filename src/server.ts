@@ -32,7 +32,12 @@ app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json({ limit: '10mb' })); 
 
 app.set('trust proxy', 1);
-const isProduction = process.env.NODE_ENV === 'production' || FRONTEND_URL.includes('onrender.com');
+// Cookie security is an explicit deployment decision, not inferred from the
+// frontend hostname. Set SECURE_COOKIES=true on any deployed environment.
+const isProduction =
+  process.env.SECURE_COOKIES === 'true' ||
+  process.env.NODE_ENV === 'production' ||
+  FRONTEND_URL.includes('onrender.com');
 // ==========================================
 // SESSION SECRET GUARD
 // cookie-session signs (does not encrypt) session contents, so a known or weak
