@@ -2,12 +2,9 @@
 import express from 'express';
 import cors from 'cors';
 import * as admin from 'firebase-admin';
-import rateLimit from 'express-rate-limit';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import cookieSession from 'cookie-session';
-import { Strategy as LocalStrategy } from 'passport-local';
-import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -86,6 +83,8 @@ app.use(passport.session());
 
 // ==========================================
 // NEW SECURITY GATEKEEPER (WHITELIST)
+// Google SSO is the only authentication method. Access is controlled solely by
+// membership in the user_access collection.
 // ==========================================
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID || '',
@@ -142,42 +141,7 @@ passport.use(new GoogleStrategy({
     }
   }
 ));
-// ==========================================
-// LOCAL (EMAIL/PASSWORD) STRATEGY — for genuinely-external users who can't use
-// Google SSO. Admin-provisioned only; resolves to the SAME session shape as Google.
-// ==========================================
-passport.use(new LocalStrategy(
-  { usernameField: 'email', passwordField: 'password' },
-  async (email, password, done) => {
-    try {
-      const cleanEmail = (email || '').toLowerCase();
-      const userRef = db.collection('user_access').doc(cleanEmail);
-      const userDoc = await userRef.get();
 
-      // No account, or account has no password set → reject (don't reveal which)
-      if (!userDoc.exists) return done(null, false, { message: 'invalid' });
-      const userData = userDoc.data();
-      if (!userData?.passwordHash) return done(null, false, { message: 'invalid' });
-
-      const ok = await bcrypt.compare(password, userData.passwordHash);
-      if (!ok) return done(null, false, { message: 'invalid' });
-
-      await userRef.update({ lastSignIn: new Date() });
-
-      // SAME session shape as the Google strategy (note: id uses email since there's no Google profile.id)
-      const sessionUser = {
-        id: cleanEmail,
-        email: cleanEmail,
-        name: userData.name,
-        role: userData.role || 'Property User',
-        assignedProperties: userData.assignedProperties || []
-      };
-      return done(null, sessionUser);
-    } catch (error) {
-      return done(error as any, false);
-    }
-  }
-));
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user: Express.User, done) => done(null, user));
 
@@ -196,22 +160,6 @@ app.get('/auth/google/callback', (req, res, next) => {
     req.logIn(user, (loginErr) => {
       if (loginErr) return next(loginErr);
       return res.redirect(FRONTEND_URL);
-    });
-  })(req, res, next);
-});
-
-// Rate-limit password login attempts (brute-force protection): 10 per 15 min per IP.
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
-
-// Email/password login for provisioned external users. Establishes the same
-// session as Google, so all downstream requireAuth/requireAdmin/scoping works identically.
-app.post('/auth/login', loginLimiter, (req, res, next) => {
-  passport.authenticate('local', (err: any, user: any) => {
-    if (err) return res.status(500).json({ error: 'Login failed' });
-    if (!user) return res.status(401).json({ error: 'Invalid email or password' });
-    req.logIn(user, (loginErr) => {
-      if (loginErr) return res.status(500).json({ error: 'Login failed' });
-      return res.json({ success: true, user });
     });
   })(req, res, next);
 });
@@ -258,9 +206,10 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
     snapshot.forEach(doc => {
       const data = doc.data();
       if (data.lastSignIn) data.lastSignIn = data.lastSignIn.toDate().toISOString();
-      // Never send hashes to the client; expose only whether one is set.
+      // Defensive: never send a credential hash to the client, even a leftover
+      // one from a document written before password auth was removed.
       const { passwordHash, ...safe } = data;
-      users.push({ ...safe, hasPassword: !!passwordHash });
+      users.push(safe);
     });
     res.json(users);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
@@ -280,24 +229,6 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
       updatedAt: new Date()
     }, { merge: true }); // Merge true keeps lastSignIn if it exists
     
-    res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
-});
-
-// Admin sets/resets a password for a user (external users who can't use Google SSO).
-app.post('/api/admin/users/:email/password', requireAdmin, async (req, res) => {
-  try {
-    const { password } = req.body;
-    if (!password || password.length < 10) {
-      return res.status(400).json({ error: 'Password must be at least 10 characters.' });
-    }
-    const cleanEmail = req.params.email.toLowerCase();
-    const userRef = db.collection('user_access').doc(cleanEmail);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) return res.status(404).json({ error: 'User not found. Create the user first.' });
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    await userRef.update({ passwordHash });
     res.json({ success: true });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
