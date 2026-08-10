@@ -263,6 +263,24 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// Admin sets/resets a password for a user (external users who can't use Google SSO).
+app.post('/api/admin/users/:email/password', requireAdmin, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password || password.length < 10) {
+      return res.status(400).json({ error: 'Password must be at least 10 characters.' });
+    }
+    const cleanEmail = req.params.email.toLowerCase();
+    const userRef = db.collection('user_access').doc(cleanEmail);
+    const userDoc = await userRef.get();
+    if (!userDoc.exists) return res.status(404).json({ error: 'User not found. Create the user first.' });
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await userRef.update({ passwordHash });
+    res.json({ success: true });
+  } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 // Delete User
 app.delete('/api/admin/users/:email', requireAdmin, async (req, res) => {
   try {
