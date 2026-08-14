@@ -6,6 +6,7 @@ import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import cookieSession from 'cookie-session';
 import dotenv from 'dotenv';
+import { log, fail } from './logger';
 
 dotenv.config();
 
@@ -15,7 +16,7 @@ let serviceAccount;
 try {
   serviceAccount = JSON.parse(serviceAccountRaw);
 } catch (e) {
-  console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY.");
+  log.error('Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY.', e);
 }
 
 admin.initializeApp({
@@ -212,7 +213,7 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
       users.push(safe);
     });
     res.json(users);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 // Add or Update User
@@ -230,7 +231,7 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
     }, { merge: true }); // Merge true keeps lastSignIn if it exists
     
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 // Delete User
@@ -238,7 +239,7 @@ app.delete('/api/admin/users/:email', requireAdmin, async (req, res) => {
   try {
     await db.collection('user_access').doc(req.params.email).delete();
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 // ==========================================
 // STANDARD DATABASE ROUTES (Existing)
@@ -249,7 +250,7 @@ app.get('/api/custom-properties', requireAuth, async (req, res) => {
     const properties: any[] = [];
     snapshot.forEach(doc => properties.push({ id: doc.id, data: doc.data() }));
     res.json(properties);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.post('/api/custom-properties', requireAdmin, async (req, res) => {
@@ -257,14 +258,14 @@ app.post('/api/custom-properties', requireAdmin, async (req, res) => {
     const { code, data } = req.body;
     await db.collection('custom_properties').doc(code).set(data);
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/remote-profiles', requireAuth, async (req, res) => {
   try {
     const doc = await db.collection('app_settings').doc('profile_rules').get();
     res.json(doc.exists ? doc.data() : null);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.post('/api/remote-profiles', requireAuth, async (req, res) => {
@@ -272,7 +273,7 @@ app.post('/api/remote-profiles', requireAuth, async (req, res) => {
     const { currentProfile, newRules } = req.body;
     await db.collection('app_settings').doc('profile_rules').set({ [currentProfile]: newRules }, { merge: true });
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/ooo-logs/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
@@ -298,7 +299,7 @@ app.get('/api/ooo-logs/:profile', requireAuth, requirePropertyAccess, async (req
       }
     });
     res.json(records);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.post('/api/ooo-logs', requireAuth, async (req, res) => {
@@ -308,14 +309,14 @@ app.post('/api/ooo-logs', requireAuth, async (req, res) => {
     record.endDate = new Date(record.endDate);
     const docRef = await db.collection('ooo_logs').add(record);
     res.json({ id: docRef.id });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.delete('/api/ooo-logs/:id', requireAuth, async (req, res) => {
   try {
     await db.collection('ooo_logs').doc(req.params.id).delete();
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
@@ -330,7 +331,7 @@ app.get('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
       upgrades.push(data);
     });
     res.json(upgrades);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.post('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
@@ -340,7 +341,7 @@ app.post('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
     if (upgrade.completedTimestamp) upgrade.completedTimestamp = new Date(upgrade.completedTimestamp);
     const docRef = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').add(upgrade);
     res.json({ firestoreId: docRef.id });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.delete('/api/completed-upgrades/:userId/:firestoreId', requireAuth, async (req, res) => {
@@ -348,7 +349,7 @@ app.delete('/api/completed-upgrades/:userId/:firestoreId', requireAuth, async (r
     if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
     await db.collection('users').doc(req.params.userId).collection('completedUpgrades').doc(req.params.firestoreId).delete();
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAdmin, async (req, res) => {
@@ -360,7 +361,7 @@ app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAdmin, async
     snapshot.docs.forEach((doc: any) => batch.delete(doc.ref));
     await batch.commit();
     res.json({ count: snapshot.size });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res) => {
@@ -370,7 +371,7 @@ app.get('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res)
     const upgrades: any[] = [];
     snapshot.forEach(doc => upgrades.push(doc.data()));
     res.json(upgrades);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.post('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res) => {
@@ -392,14 +393,14 @@ app.post('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res
     upgrades.forEach((upg: any) => batch.set(ref.doc(), sanitize(upg)));
     await batch.commit();
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/lead-times/:profile', requireAuth, async (req, res) => {
   try {
     const doc = await db.collection('property_analytics').doc(req.params.profile).get();
     res.json(doc.exists && doc.data()?.leadTimeStats ? doc.data()!.leadTimeStats : {});
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.post('/api/lead-times/:profile', requireAuth, async (req, res) => {
@@ -410,21 +411,21 @@ app.post('/api/lead-times/:profile', requireAuth, async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp() 
     }, { merge: true });
     res.json({ success: true });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/snt-data/:prefix', requireAuth, async (req, res) => {
   try {
     const doc = await db.collection('SNTData').doc(`${req.params.prefix}_latest`).get();
     res.json(doc.exists ? doc.data() : null);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 app.get('/api/synxis-data/:prefix', requireAuth, async (req, res) => {
   try {
     const doc = await db.collection('SynxisData').doc(`${req.params.prefix}_latest`).get();
     res.json(doc.exists ? doc.data() : null);
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  } catch (e: any) { fail(req, res, e); }
 });
 
 // Lightweight endpoint for cron-job.org to ping
@@ -434,5 +435,5 @@ app.get('/api/health', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Backend Server running on port ${PORT}`);
+  log.info(`Backend server listening on port ${PORT}`);
 });
