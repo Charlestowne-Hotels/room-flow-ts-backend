@@ -1,14 +1,40 @@
-// src/logger.ts
+// src/log.ts
 // ==========================================
-// LEVELED LOGGING (#14)
-// Level comes from LOG_LEVEL (error|warn|info|debug) and defaults to info.
-// Render captures stdout, and at this scale having a record of what broke is
-// worth more than the log volume. Set LOG_LEVEL=warn to quiet it down, or
-// LOG_LEVEL=debug when chasing something specific.
+// LEVELED LOGGING (#14) — frontend
+// error and warn always emit. info and debug are off unless debug mode is on.
 //
-// Do not log request bodies or user records here — guest names, emails and
-// reservation detail are PII and these lines persist in Render's log store.
+// Turn it on:  add ?debug=1 to the URL (persists across reloads)
+// Turn it off: ?debug=0
+//
+// Never pass guest names, emails, or reservation detail to info/debug — the
+// browser console is shoulder-surfable and gets pasted into tickets.
 // ==========================================
+const KEY = 'pf_debug';
+
+const resolveDebug = (): boolean => {
+  try {
+    const param = new URLSearchParams(window.location.search).get('debug');
+    if (param === '1') { localStorage.setItem(KEY, '1'); return true; }
+    if (param === '0') { localStorage.removeItem(KEY); return false; }
+    return localStorage.getItem(KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const debugOn = resolveDebug();
+
+export const log = {
+  enabled: debugOn,
+  error: (...args: unknown[]) => console.error('[PF]', ...args),
+  warn:  (...args: unknown[]) => console.warn('[PF]', ...args),
+  info:  (...args: unknown[]) => { if (debugOn) console.log('[PF]', ...args); },
+  debug: (...args: unknown[]) => { if (debugOn) console.log('[PF debug]', ...args); },
+};
+
+if (debugOn) console.log('[PF] debug logging on — append ?debug=0 to turn off');
+
+
 const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 } as const;
 type Level = keyof typeof LEVELS;
 
