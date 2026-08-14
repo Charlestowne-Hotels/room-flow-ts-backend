@@ -1,40 +1,34 @@
-// src/log.ts
+// src/logger.ts
 // ==========================================
-// LEVELED LOGGING (#14) — frontend
-// error and warn always emit. info and debug are off unless debug mode is on.
+// LEVELED LOGGING (#14)
+// Level comes from LOG_LEVEL (error|warn|info|debug) and defaults to info.
+// Render captures stdout, and at this scale having a record of what broke is
+// worth more than the log volume. Set LOG_LEVEL=warn to quiet it down, or
+// LOG_LEVEL=debug when chasing something specific.
 //
-// Turn it on:  add ?debug=1 to the URL (persists across reloads)
-// Turn it off: ?debug=0
-//
-// Never pass guest names, emails, or reservation detail to info/debug — the
-// browser console is shoulder-surfable and gets pasted into tickets.
+// Do not log request bodies or user records here — guest names, emails and
+// reservation detail are PII and these lines persist in Render's log store.
 // ==========================================
-const KEY = 'pf_debug';
+const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 } as const;
+type Level = keyof typeof LEVELS;
 
-const resolveDebug = (): boolean => {
-  try {
-    const param = new URLSearchParams(window.location.search).get('debug');
-    if (param === '1') { localStorage.setItem(KEY, '1'); return true; }
-    if (param === '0') { localStorage.removeItem(KEY); return false; }
-    return localStorage.getItem(KEY) === '1';
-  } catch {
-    // localStorage throws outright in some privacy modes. A logger must never
-    // be able to crash the app on load.
-    return false;
-  }
+const configured = (process.env.LOG_LEVEL || 'info').toLowerCase() as Level;
+const threshold = LEVELS[configured] ?? LEVELS.info;
+
+const emit = (level: Level, args: unknown[]) => {
+  if (LEVELS[level] > threshold) return;
+  const line = `[${new Date().toISOString()}] ${level.toUpperCase()}`;
+  if (level === 'error') console.error(line, ...args);
+  else if (level === 'warn') console.warn(line, ...args);
+  else console.log(line, ...args);
 };
-
-const debugOn = resolveDebug();
 
 export const log = {
-  enabled: debugOn,
-  error: (...args: unknown[]) => console.error('[PF]', ...args),
-  warn:  (...args: unknown[]) => console.warn('[PF]', ...args),
-  info:  (...args: unknown[]) => { if (debugOn) console.log('[PF]', ...args); },
-  debug: (...args: unknown[]) => { if (debugOn) console.log('[PF debug]', ...args); },
+  error: (...args: unknown[]) => emit('error', args),
+  warn:  (...args: unknown[]) => emit('warn', args),
+  info:  (...args: unknown[]) => emit('info', args),
+  debug: (...args: unknown[]) => emit('debug', args),
 };
-
-if (debugOn) console.log('[PF] debug logging on — append ?debug=0 to turn off');
 
 // ==========================================
 // Single exit point for route failures. Previously every catch block returned
