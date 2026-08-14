@@ -35,3 +35,18 @@ export const log = {
 };
 
 if (debugOn) console.log('[PF] debug logging on — append ?debug=0 to turn off');
+
+// ==========================================
+// Single exit point for route failures. Previously every catch block returned
+// e.message to the client and logged nothing server-side, so a user reporting
+// "it failed" left no trace. This logs full detail with request context, and
+// returns the same shape the frontend already expects.
+//
+// Note: still returns e.message to the client. Hardening that to a generic
+// message plus a reference id is a separate decision — it changes what the UI
+// displays — so it's deliberately not bundled here.
+// ==========================================
+export const fail = (req: any, res: any, e: any) => {
+  log.error(`${req?.method} ${req?.originalUrl} —`, e?.message, e?.stack);
+  res.status(500).json({ error: e?.message });
+};
