@@ -234,6 +234,35 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
   } catch (e: any) { fail(req, res, e); }
 });
 
+// ==========================================
+// ONE-TIME MIGRATION: per-user upgrade history -> shared per-property history.
+// Idempotent: target doc IDs are derived from the source, so re-running
+// overwrites rather than duplicating. Only completed upgrades are migrated —
+// accepted upgrades are a transient working list and regenerate naturally.
+// ==========================================
+app.post('/api/admin/migrate-upgrades', requireAdmin, async (req, res) => {
+  try {
+    const userRefs = await db.collection('users').listDocuments();
+    let migrated = 0, skipped = 0;
+    const byProfile: Record<string, number> = {};
+
+    for (const userRef of userRefs) {
+      const snap = await userRef.collection('completedUpgrades').get();
+      for (const doc of snap.docs) {
+        const data = doc.data();
+        if (!data.profile) { skipped++; continue; }
+        await db.collection('properties').doc(data.profile)
+          .collection('completedUpgrades').doc(`${userRef.id}_${doc.id}`)
+          .set({ ...data, completedBy: data.completedBy || userRef.id }, { merge: true });
+        byProfile[data.profile] = (byProfile[data.profile] || 0) + 1;
+        migrated++;
+      }
+    }
+    log.info('migrate-upgrades', { migrated, skipped, byProfile });
+    res.json({ success: true, migrated, skipped, byProfile });
+  } catch (e: any) { fail(req, res, e); }
+});
+
 // Delete User
 app.delete('/api/admin/users/:email', requireAdmin, async (req, res) => {
   try {
