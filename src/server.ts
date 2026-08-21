@@ -237,8 +237,9 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
 // ==========================================
 // ONE-TIME MIGRATION: per-user upgrade history -> shared per-property history.
 // Idempotent: target doc IDs are derived from the source, so re-running
-// overwrites rather than duplicating. Only completed upgrades are migrated —
+// overwrites rather than duplicating. Only completed upgrades are migrated --
 // accepted upgrades are a transient working list and regenerate naturally.
+// Safe to leave in place; the source collections are never modified.
 // ==========================================
 app.post('/api/admin/migrate-upgrades', requireAdmin, async (req, res) => {
   try {
@@ -348,68 +349,75 @@ app.delete('/api/ooo-logs/:id', requireAuth, async (req, res) => {
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.get('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
+// ==========================================
+// UPGRADE HISTORY -- shared per property.
+// Previously scoped per user, which meant a GM and AGM at the same property
+// saw different completed upgrades and different analytics. Now keyed by
+// profile and gated by requirePropertyAccess, so everyone assigned to a
+// property sees the same data. Clearing stays admin-only.
+// ==========================================
+app.get('/api/completed-upgrades/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
-    if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    const snapshot = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').get();
+    const snapshot = await db.collection('properties').doc(req.params.profile).collection('completedUpgrades').get();
     const upgrades: any[] = [];
     snapshot.forEach((doc: any) => {
       const data = doc.data();
       data.firestoreId = doc.id;
-      if (data.completedTimestamp) data.completedTimestamp = data.completedTimestamp.toDate().toISOString();
+      if (data.completedTimestamp?.toDate) data.completedTimestamp = data.completedTimestamp.toDate().toISOString();
       upgrades.push(data);
     });
     res.json(upgrades);
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.post('/api/completed-upgrades/:userId', requireAuth, async (req, res) => {
+app.post('/api/completed-upgrades/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
-    if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
     const upgrade = req.body;
     if (upgrade.completedTimestamp) upgrade.completedTimestamp = new Date(upgrade.completedTimestamp);
-    const docRef = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').add(upgrade);
+    upgrade.profile = req.params.profile;
+    upgrade.completedBy = (req.user as any).email;
+    const docRef = await db.collection('properties').doc(req.params.profile).collection('completedUpgrades').add(upgrade);
     res.json({ firestoreId: docRef.id });
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.delete('/api/completed-upgrades/:userId/:firestoreId', requireAuth, async (req, res) => {
+app.delete('/api/completed-upgrades/:profile/:firestoreId', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
-    if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    await db.collection('users').doc(req.params.userId).collection('completedUpgrades').doc(req.params.firestoreId).delete();
+    await db.collection('properties').doc(req.params.profile).collection('completedUpgrades').doc(req.params.firestoreId).delete();
     res.json({ success: true });
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.delete('/api/completed-upgrades/:userId/clear/:profile', requireAdmin, async (req, res) => {
+// Path is /clear/all rather than /clear/:profile -- with :profile now first,
+// the old shape would collide with the delete-by-id route above.
+app.delete('/api/completed-upgrades/:profile/clear/all', requireAdmin, async (req, res) => {
   try {
-    if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    const snapshot = await db.collection('users').doc(req.params.userId).collection('completedUpgrades').where('profile', '==', req.params.profile).get();
+    const ref = db.collection('properties').doc(req.params.profile).collection('completedUpgrades');
+    const snapshot = await ref.get();
     if (snapshot.empty) return res.json({ count: 0 });
     const batch = db.batch();
     snapshot.docs.forEach((doc: any) => batch.delete(doc.ref));
     await batch.commit();
+    log.info('cleared completed upgrades', { profile: req.params.profile, count: snapshot.size, by: (req.user as any).email });
     res.json({ count: snapshot.size });
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.get('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res) => {
+app.get('/api/accepted-upgrades/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
-    if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
-    const snapshot = await db.collection('users').doc(req.params.userId).collection('acceptedUpgrades').where('profile', '==', req.params.profile).get();
+    const snapshot = await db.collection('properties').doc(req.params.profile).collection('acceptedUpgrades').get();
     const upgrades: any[] = [];
     snapshot.forEach(doc => upgrades.push(doc.data()));
     res.json(upgrades);
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.post('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res) => {
+app.post('/api/accepted-upgrades/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
-    if ((req.user as any).id !== req.params.userId) return res.status(403).json({ error: 'Forbidden' });
     const { upgrades } = req.body;
     const profile = req.params.profile;
-    const ref = db.collection('users').doc(req.params.userId).collection('acceptedUpgrades');
-    
+    const ref = db.collection('properties').doc(profile).collection('acceptedUpgrades');
+
     const sanitize = (obj: any) => {
       const clean: any = {};
       Object.keys(obj).forEach(k => { if (obj[k] !== undefined) clean[k] = obj[k]; });
@@ -417,13 +425,14 @@ app.post('/api/accepted-upgrades/:userId/:profile', requireAuth, async (req, res
       return clean;
     };
     const batch = db.batch();
-    const existing = await ref.where('profile', '==', profile).get();
+    const existing = await ref.get();
     existing.docs.forEach((doc: any) => batch.delete(doc.ref));
     upgrades.forEach((upg: any) => batch.set(ref.doc(), sanitize(upg)));
     await batch.commit();
     res.json({ success: true });
   } catch (e: any) { fail(req, res, e); }
 });
+
 
 app.get('/api/lead-times/:profile', requireAuth, async (req, res) => {
   try {
