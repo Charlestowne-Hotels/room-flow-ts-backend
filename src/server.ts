@@ -252,8 +252,12 @@ app.post('/api/admin/migrate-upgrades', requireAdmin, async (req, res) => {
       for (const doc of snap.docs) {
         const data = doc.data();
         if (!data.profile) { skipped++; continue; }
+                // Key on the upgrade's identity, not its source document. The same
+        // upgrade recorded under two user identities (pre- and post-OAuth
+        // migration) collapses into one document instead of duplicating.
+        const key = `${data.resId}_${data.isoArrival}`.replace(/[^A-Za-z0-9_-]/g, '');
         await db.collection('properties').doc(data.profile)
-          .collection('completedUpgrades').doc(`${userRef.id}_${doc.id}`)
+          .collection('completedUpgrades').doc(key)
           .set({ ...data, completedBy: data.completedBy || userRef.id }, { merge: true });
         byProfile[data.profile] = (byProfile[data.profile] || 0) + 1;
         migrated++;
