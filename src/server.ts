@@ -380,7 +380,15 @@ app.post('/api/completed-upgrades/:profile', requireAuth, requirePropertyAccess,
     if (upgrade.completedTimestamp) upgrade.completedTimestamp = new Date(upgrade.completedTimestamp);
     upgrade.profile = req.params.profile;
     upgrade.completedBy = (req.user as any).email;
-    const docRef = await db.collection('properties').doc(req.params.profile).collection('completedUpgrades').add(upgrade);
+        // Same identity key the migration uses (resId + arrival). With .add()'s
+    // auto-id, a re-run of migrate-upgrades from the legacy users/{userId}
+    // collections would land a second copy of an upgrade already written here.
+    // Keying both paths identically makes that re-run idempotent — which
+    // matters because those legacy collections are still the only rollback.
+    const key = `${upgrade.resId}_${upgrade.isoArrival}`.replace(/[^A-Za-z0-9_-]/g, '');
+    await db.collection('properties').doc(req.params.profile)
+      .collection('completedUpgrades').doc(key).set(upgrade, { merge: true });
+    const docRef = { id: key };
     res.json({ firestoreId: docRef.id });
   } catch (e: any) { fail(req, res, e); }
 });
