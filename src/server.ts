@@ -185,6 +185,27 @@ const requireAdmin = (req: express.Request, res: express.Response, next: express
   next();
 };
 
+// Settings writes (rules, thresholds, hierarchy, rate mapping, manual lead
+// times) change how the engine computes upgrades, so they are gated to
+// Property Admin and above. Property Users can operate the app and log
+// operational data, but cannot alter the logic. Some routes carry the profile
+// as a route param and some (remote-profiles) as a body field, hence the source
+// argument — a body-carried profile was the reason that endpoint had no
+// scoping at all and any authenticated user could rewrite any property's rules.
+const requirePropertyAdmin = (source: 'param' | 'body' = 'param') =>
+  (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const user = req.user as any;
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (user.role === 'Admin') return next();
+    if (user.role !== 'Property Admin') {
+      return res.status(403).json({ error: 'Settings changes require Property Admin access' });
+    }
+    const profile = source === 'body' ? req.body?.currentProfile : req.params.profile;
+    const assigned = (user.assignedProperties || []).map((p: string) => p.toLowerCase());
+    if (profile && assigned.includes(String(profile).toLowerCase())) return next();
+    return res.status(403).json({ error: 'Not assigned to this property' });
+  };
+
 // Blocks access to a property the user isn't assigned to (admins bypass). Expects a :profile route param.
 const requirePropertyAccess = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const user = req.user as any;
@@ -302,7 +323,7 @@ app.get('/api/remote-profiles', requireAuth, async (req, res) => {
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.post('/api/remote-profiles', requireAuth, async (req, res) => {
+app.post('/api/remote-profiles', requireAuth, requirePropertyAdmin('body'), async (req, res) => {
   try {
     const { currentProfile, newRules } = req.body;
     await db.collection('app_settings').doc('profile_rules').set({ [currentProfile]: newRules }, { merge: true });
@@ -453,7 +474,7 @@ app.get('/api/lead-times/:profile', requireAuth, async (req, res) => {
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.post('/api/lead-times/:profile', requireAuth, async (req, res) => {
+app.post('/api/lead-times/:profile', requireAuth, requirePropertyAdmin(), async (req, res) => {
   try {
     const { roomData } = req.body;
     await db.collection('property_analytics').doc(req.params.profile).set({ 
