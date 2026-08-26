@@ -98,30 +98,16 @@ passport.use(new GoogleStrategy({
       const email = profile.emails?.[0]?.value?.toLowerCase();
       if (!email) return done(new Error("No email found"), false);
 
-      // CHANGE THIS TO YOUR ACTUAL EMAIL TO BOOTSTRAP YOUR FIRST ACCOUNT
-      const SUPER_ADMIN_EMAIL = 'jryan@charlestownehotels.com'; 
-
       const userRef = db.collection('user_access').doc(email);
       const userDoc = await userRef.get();
 
-      // If user isn't in DB and isn't the Super Admin, reject them
-      if (!userDoc.exists && email !== SUPER_ADMIN_EMAIL) {
-        return done(null, false, { message: 'unauthorized' }); 
+      // If user isn't in DB, reject them immediately
+      if (!userDoc.exists) {
+        return done(null, false, { message: 'unauthorized' });
       }
 
-      // If Super Admin logs in for the very first time, create their Admin profile
-      if (!userDoc.exists && email === SUPER_ADMIN_EMAIL) {
-        await userRef.set({
-          name: profile.displayName,
-          email: email,
-          role: 'Admin',
-          assignedProperties: [],
-          lastSignIn: new Date()
-        });
-      } else {
-        // Update last sign in for existing users
-        await userRef.update({ lastSignIn: new Date() });
-      }
+      // Update last sign in for existing, authorized users
+      await userRef.update({ lastSignIn: new Date() });
 
       // Fetch fresh data
       const freshUserDoc = await userRef.get();
