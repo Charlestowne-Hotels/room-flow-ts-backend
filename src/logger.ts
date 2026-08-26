@@ -41,6 +41,14 @@ export const log = {
 // displays — so it's deliberately not bundled here.
 // ==========================================
 export const fail = (req: any, res: any, e: any) => {
-  log.error(`${req?.method} ${req?.originalUrl} —`, e?.message, e?.stack);
-  res.status(500).json({ error: e?.message });
+  // Generate a random 4-character alphanumeric string (e.g., ERR-9A4F)
+  const refId = 'ERR-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+  
+  // Log the full detail securely on the server, tagged with the refId
+  log.error(`[${refId}] ${req?.method} ${req?.originalUrl}  `, e?.message, e?.stack);
+  
+  // Send a safe, generic message to the client
+  res.status(500).json({ 
+    error: `An unexpected error occurred. (Ref: ${refId})` 
+  });
 };
