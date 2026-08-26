@@ -476,14 +476,16 @@ app.post('/api/lead-times/:profile', requireAuth, requirePropertyAdmin(), async 
 app.get('/api/snt-data/:profile/:prefix', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
     const doc = await db.collection('SNTData').doc(`${req.params.prefix}_latest`).get();
-    res.json(doc.exists ? doc.data() : null);
+    // Attach the native Firestore updateTime to the payload
+    res.json(doc.exists ? { ...doc.data(), _updatedAt: doc.updateTime?.toDate().toISOString() } : null);
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.get('/api/synxis-data/:profile/:prefix', requireAuth, async (req, res) => {
+app.get('/api/synxis-data/:profile/:prefix', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
     const doc = await db.collection('SynxisData').doc(`${req.params.prefix}_latest`).get();
-    res.json(doc.exists ? doc.data() : null);
+    // Attach the native Firestore updateTime to the payload
+    res.json(doc.exists ? { ...doc.data(), _updatedAt: doc.updateTime?.toDate().toISOString() } : null);
   } catch (e: any) { fail(req, res, e); }
 });
 
