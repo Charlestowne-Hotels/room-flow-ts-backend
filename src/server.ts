@@ -98,8 +98,7 @@ passport.use(new GoogleStrategy({
       const email = profile.emails?.[0]?.value?.toLowerCase();
       if (!email) return done(new Error("No email found"), false);
 
-      // TEMPORARY TEST: Forcing the system to check a fake email
-      const userRef = db.collection('user_access').doc("hacker@marriott.com");
+      const userRef = db.collection('user_access').doc(email);
       const userDoc = await userRef.get();
 
       // If user isn't in DB, reject them immediately
