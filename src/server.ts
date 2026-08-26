@@ -343,17 +343,19 @@ app.get('/api/ooo-logs/:profile', requireAuth, requirePropertyAccess, async (req
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.post('/api/ooo-logs', requireAuth, async (req, res) => {
+app.post('/api/ooo-logs/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
     const record = req.body;
     record.startDate = new Date(record.startDate);
     record.endDate = new Date(record.endDate);
+    // Ensure the record's profile matches the validated URL param
+    record.profile = req.params.profile; 
     const docRef = await db.collection('ooo_logs').add(record);
     res.json({ id: docRef.id });
   } catch (e: any) { fail(req, res, e); }
 });
 
-app.delete('/api/ooo-logs/:id', requireAuth, async (req, res) => {
+app.delete('/api/ooo-logs/:profile/:id', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
     await db.collection('ooo_logs').doc(req.params.id).delete();
     res.json({ success: true });
