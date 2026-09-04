@@ -424,6 +424,33 @@ app.delete('/api/completed-upgrades/:profile/clear/all', requireAdmin, async (re
   } catch (e: any) { fail(req, res, e); }
 });
 
+// Single document per property rather than a collection — a snapshot describes
+// one accepted path, so a second one would only ever mean the first is stale.
+app.get('/api/path-snapshot/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
+  try {
+    const doc = await db.collection('properties').doc(req.params.profile)
+      .collection('pathSnapshot').doc('current').get();
+    res.json(doc.exists ? doc.data() : null);
+  } catch (e: any) { fail(req, res, e); }
+});
+
+app.post('/api/path-snapshot/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
+  try {
+    const { snapshot } = req.body;
+    await db.collection('properties').doc(req.params.profile)
+      .collection('pathSnapshot').doc('current').set(snapshot);
+    res.json({ success: true });
+  } catch (e: any) { fail(req, res, e); }
+});
+
+app.delete('/api/path-snapshot/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
+  try {
+    await db.collection('properties').doc(req.params.profile)
+      .collection('pathSnapshot').doc('current').delete();
+    res.json({ success: true });
+  } catch (e: any) { fail(req, res, e); }
+});
+
 app.get('/api/accepted-upgrades/:profile', requireAuth, requirePropertyAccess, async (req, res) => {
   try {
     const snapshot = await db.collection('properties').doc(req.params.profile).collection('acceptedUpgrades').get();
